@@ -1,8 +1,6 @@
 #![no_std]
 
-use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, token, Address, Env, Vec,
-};
+use soroban_sdk::{contract, contracterror, contractimpl, contracttype, token, Address, Env, Vec};
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -30,16 +28,11 @@ fn save_admin(env: &Env, admin: &Address) {
 }
 
 fn read_admin(env: &Env) -> Address {
-    env.storage()
-        .instance()
-        .get(&DataKey::Admin)
-        .unwrap()
+    env.storage().instance().get(&DataKey::Admin).unwrap()
 }
 
 fn save_fee_collector(env: &Env, addr: &Address) {
-    env.storage()
-        .instance()
-        .set(&DataKey::FeeCollector, addr);
+    env.storage().instance().set(&DataKey::FeeCollector, addr);
 }
 
 fn read_fee_collector(env: &Env) -> Address {
@@ -54,10 +47,7 @@ fn save_fee_bps(env: &Env, fee_bps: &u32) {
 }
 
 fn read_fee_bps(env: &Env) -> u32 {
-    env.storage()
-        .instance()
-        .get(&DataKey::FeeBps)
-        .unwrap_or(0)
+    env.storage().instance().get(&DataKey::FeeBps).unwrap_or(0)
 }
 
 fn read_initialized(env: &Env) -> bool {
@@ -65,9 +55,7 @@ fn read_initialized(env: &Env) -> bool {
 }
 
 fn mark_initialized(env: &Env) {
-    env.storage()
-        .instance()
-        .set(&DataKey::Initialized, &true);
+    env.storage().instance().set(&DataKey::Initialized, &true);
 }
 
 fn check_initialized(env: &Env) {
@@ -123,10 +111,8 @@ impl OnboardingBridge {
             token_client.transfer(&env.current_contract_address(), &target, &net_amount);
         }
 
-        env.events().publish(
-            ("CAddressFunded", source, target),
-            (amount, fee, asset),
-        );
+        env.events()
+            .publish(("CAddressFunded", source, target), (amount, fee, asset));
     }
 
     pub fn batch_fund_c_address(

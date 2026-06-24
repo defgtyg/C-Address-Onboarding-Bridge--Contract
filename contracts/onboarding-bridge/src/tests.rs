@@ -18,7 +18,10 @@ fn init_token(env: &Env, token_id: &Address, admin: &Address) {
     token.initialize(admin, &7u32, &"Test".into_val(env), &"TST".into_val(env));
 }
 
-fn create_bridge_client<'a>(env: &'a Env, bridge_id: &Address) -> crate::OnboardingBridgeClient<'a> {
+fn create_bridge_client<'a>(
+    env: &'a Env,
+    bridge_id: &Address,
+) -> crate::OnboardingBridgeClient<'a> {
     crate::OnboardingBridgeClient::new(env, bridge_id)
 }
 
@@ -311,7 +314,13 @@ pub struct TestToken;
 
 #[contractimpl]
 impl TestToken {
-    pub fn initialize(e: Env, admin: Address, decimal: u32, name: soroban_sdk::String, symbol: soroban_sdk::String) {
+    pub fn initialize(
+        e: Env,
+        admin: Address,
+        decimal: u32,
+        name: soroban_sdk::String,
+        symbol: soroban_sdk::String,
+    ) {
         e.storage().instance().set(&TDataKey::Admin, &admin);
         e.storage().instance().set(&TDataKey::Decimal, &decimal);
         e.storage().instance().set(&TDataKey::Name, &name);
@@ -323,11 +332,16 @@ impl TestToken {
         let admin: Address = e.storage().instance().get(&TDataKey::Admin).unwrap();
         admin.require_auth();
         let bal = Self::balance(e.clone(), to.clone());
-        e.storage().persistent().set(&(TDataKey::Balance, to), &(bal + amount));
+        e.storage()
+            .persistent()
+            .set(&(TDataKey::Balance, to), &(bal + amount));
     }
 
     pub fn balance(e: Env, id: Address) -> i128 {
-        e.storage().persistent().get(&(TDataKey::Balance, id)).unwrap_or(0)
+        e.storage()
+            .persistent()
+            .get(&(TDataKey::Balance, id))
+            .unwrap_or(0)
     }
 
     pub fn transfer(e: Env, from: Address, to: Address, amount: i128) {
@@ -337,7 +351,11 @@ impl TestToken {
             panic!("insufficient balance");
         }
         let to_bal = Self::balance(e.clone(), to.clone());
-        e.storage().persistent().set(&(TDataKey::Balance, from), &(from_bal - amount));
-        e.storage().persistent().set(&(TDataKey::Balance, to), &(to_bal + amount));
+        e.storage()
+            .persistent()
+            .set(&(TDataKey::Balance, from), &(from_bal - amount));
+        e.storage()
+            .persistent()
+            .set(&(TDataKey::Balance, to), &(to_bal + amount));
     }
 }

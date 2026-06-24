@@ -67,7 +67,7 @@ export class OnboardingBridgeSDK {
 
       return {
         hash: response.hash,
-        status: response.status === 'success' ? 'success' : 'pending',
+        status: response.status === 'ERROR' ? 'failed' : 'pending',
       };
     } catch (error: any) {
       return {
@@ -113,7 +113,7 @@ export class OnboardingBridgeSDK {
 
       return {
         hash: response.hash,
-        status: response.status === 'success' ? 'success' : 'pending',
+        status: response.status === 'ERROR' ? 'failed' : 'pending',
       };
     } catch (error: any) {
       return {
@@ -157,7 +157,7 @@ export class OnboardingBridgeSDK {
 
       return {
         hash: response.hash,
-        status: response.status === 'success' ? 'success' : 'pending',
+        status: response.status === 'ERROR' ? 'failed' : 'pending',
       };
     } catch (error: any) {
       return {
@@ -177,7 +177,7 @@ export class OnboardingBridgeSDK {
         this.buildSimulationTx('query_fee_bps', []),
       );
 
-    if (result.error) {
+    if ('error' in result && result.error) {
       throw new Error(`Failed to get fee: ${result.error}`);
     }
 
@@ -194,7 +194,7 @@ export class OnboardingBridgeSDK {
         this.buildSimulationTx('query_fee_collector', []),
       );
 
-    if (result.error) {
+    if ('error' in result && result.error) {
       throw new Error(`Failed to get fee collector: ${result.error}`);
     }
 
@@ -211,7 +211,7 @@ export class OnboardingBridgeSDK {
         this.buildSimulationTx('query_admin', []),
       );
 
-    if (result.error) {
+    if ('error' in result && result.error) {
       throw new Error(`Failed to get admin: ${result.error}`);
     }
 
@@ -231,7 +231,7 @@ export class OnboardingBridgeSDK {
         this.buildSimulationTx('query_balance', [cAddress, asset]),
       );
 
-    if (result.error) {
+    if ('error' in result && result.error) {
       throw new Error(`Failed to get balance: ${result.error}`);
     }
 
@@ -248,7 +248,7 @@ export class OnboardingBridgeSDK {
         this.buildSimulationTx('query_is_initialized', []),
       );
 
-    if (result.error) {
+    if ('error' in result && result.error) {
       throw new Error(`Failed to check initialization: ${result.error}`);
     }
 
@@ -288,7 +288,7 @@ export class OnboardingBridgeSDK {
 
       return {
         hash: response.hash,
-        status: response.status === 'success' ? 'success' : 'pending',
+        status: response.status === 'ERROR' ? 'failed' : 'pending',
       };
     } catch (error: any) {
       return {
@@ -331,7 +331,7 @@ export class OnboardingBridgeSDK {
 
       return {
         hash: response.hash,
-        status: response.status === 'success' ? 'success' : 'pending',
+        status: response.status === 'ERROR' ? 'failed' : 'pending',
       };
     } catch (error: any) {
       return {
@@ -374,7 +374,7 @@ export class OnboardingBridgeSDK {
 
       return {
         hash: response.hash,
-        status: response.status === 'success' ? 'success' : 'pending',
+        status: response.status === 'ERROR' ? 'failed' : 'pending',
       };
     } catch (error: any) {
       return {
