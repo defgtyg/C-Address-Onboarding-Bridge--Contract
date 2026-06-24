@@ -15,7 +15,6 @@ import {
   scValToNative,
   TransactionBuilder,
   BASE_FEE,
-  Networks,
 } from '@stellar/stellar-sdk';
 
 export class OnboardingBridgeSDK {
@@ -408,6 +407,9 @@ export class OnboardingBridgeSDK {
     if (typeof arg === 'string') {
       if (arg.startsWith('C') || arg.startsWith('G')) {
         return new Address(arg).toScVal();
+      }
+      if (/^\d+$/.test(arg)) {
+        return nativeToScVal(BigInt(arg), { type: 'i128' });
       }
       return nativeToScVal(arg, { type: 'string' });
     }
