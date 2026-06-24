@@ -33,9 +33,6 @@ jobs:
       - name: Build WASM (release)
         run: cargo build -p onboarding-bridge --release --target wasm32-unknown-unknown
 
-      - name: Optimize WASM with stellar-contract-optimizer
-        uses: stellar/stellar-contract-optimizer@v1
-
       - name: Upload WASM artifact
         uses: actions/upload-artifact@v4
         with:
