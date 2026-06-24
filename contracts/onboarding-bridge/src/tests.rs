@@ -3,7 +3,7 @@ use crate::{BridgeError, OnboardingBridge};
 use soroban_sdk::{
     contract, contractimpl, contracttype,
     testutils::{Address as _, Events},
-    Address, Env, IntoVal, Vec,
+    Address, Bytes, BytesN, Env, IntoVal, Vec,
 };
 
 fn register_all_contracts(env: &Env) -> (Address, Address) {
@@ -305,6 +305,248 @@ fn test_query_fee_bps_uninitialized() {
         bridge.try_query_fee_bps(),
         Err(Ok(BridgeError::NotInitialized))
     );
+}
+
+#[test]
+fn test_pause_and_unpause() {
+    let env = Env::default();
+    let (admin, _user, fee_collector) = create_test_users(&env);
+    let (bridge_id, _) = register_all_contracts(&env);
+    let bridge = create_bridge_client(&env, &bridge_id);
+
+    bridge.initialize(&admin, &fee_collector, &50u32);
+
+    assert!(!bridge.query_is_paused());
+
+    bridge.pause();
+    assert!(bridge.query_is_paused());
+
+    bridge.unpause();
+    assert!(!bridge.query_is_paused());
+}
+
+#[test]
+fn test_fund_c_address_paused() {
+    let env = Env::default();
+    let (admin, user, fee_collector) = create_test_users(&env);
+    let (bridge_id, token_id) = register_all_contracts(&env);
+    let bridge = create_bridge_client(&env, &bridge_id);
+    init_token(&env, &token_id, &admin);
+
+    bridge.initialize(&admin, &fee_collector, &100u32);
+    mint_tokens(&env, &token_id, &user, 1000i128);
+    bridge.pause();
+
+    let target = Address::generate(&env);
+    assert_eq!(
+        bridge.try_fund_c_address(&user, &target, &token_id, &500i128),
+        Err(Ok(BridgeError::ContractPaused))
+    );
+}
+
+#[test]
+fn test_batch_fund_paused() {
+    let env = Env::default();
+    let (admin, user, fee_collector) = create_test_users(&env);
+    let (bridge_id, token_id) = register_all_contracts(&env);
+    let bridge = create_bridge_client(&env, &bridge_id);
+    init_token(&env, &token_id, &admin);
+
+    bridge.initialize(&admin, &fee_collector, &100u32);
+    mint_tokens(&env, &token_id, &user, 1000i128);
+    bridge.pause();
+
+    let target = Address::generate(&env);
+    let targets = Vec::from_array(&env, [target.clone()]);
+    let amounts = Vec::from_array(&env, [500i128]);
+    assert_eq!(
+        bridge.try_batch_fund_c_address(&user, &targets, &amounts, &token_id),
+        Err(Ok(BridgeError::ContractPaused))
+    );
+}
+
+#[test]
+fn test_withdraw_fees_paused() {
+    let env = Env::default();
+    let (admin, user, fee_collector) = create_test_users(&env);
+    let (bridge_id, token_id) = register_all_contracts(&env);
+    let bridge = create_bridge_client(&env, &bridge_id);
+    init_token(&env, &token_id, &admin);
+
+    bridge.initialize(&admin, &fee_collector, &100u32);
+    mint_tokens(&env, &token_id, &user, 1000i128);
+    let target = Address::generate(&env);
+    bridge.fund_c_address(&user, &target, &token_id, &500i128);
+    bridge.pause();
+
+    assert_eq!(
+        bridge.try_withdraw_fees(&token_id, &5i128),
+        Err(Ok(BridgeError::ContractPaused))
+    );
+}
+
+#[test]
+fn test_set_fee_bps_paused() {
+    let env = Env::default();
+    let (admin, _user, fee_collector) = create_test_users(&env);
+    let (bridge_id, _) = register_all_contracts(&env);
+    let bridge = create_bridge_client(&env, &bridge_id);
+
+    bridge.initialize(&admin, &fee_collector, &50u32);
+    bridge.pause();
+    assert_eq!(
+        bridge.try_set_fee_bps(&100u32),
+        Err(Ok(BridgeError::ContractPaused))
+    );
+}
+
+#[test]
+fn test_set_fee_collector_paused() {
+    let env = Env::default();
+    let (admin, _user, fee_collector) = create_test_users(&env);
+    let (bridge_id, _) = register_all_contracts(&env);
+    let bridge = create_bridge_client(&env, &bridge_id);
+
+    bridge.initialize(&admin, &fee_collector, &50u32);
+    bridge.pause();
+    assert_eq!(
+        bridge.try_set_fee_collector(&Address::generate(&env)),
+        Err(Ok(BridgeError::ContractPaused))
+    );
+}
+
+#[test]
+fn test_set_admin_paused() {
+    let env = Env::default();
+    let (admin, _user, fee_collector) = create_test_users(&env);
+    let (bridge_id, _) = register_all_contracts(&env);
+    let bridge = create_bridge_client(&env, &bridge_id);
+
+    bridge.initialize(&admin, &fee_collector, &50u32);
+    bridge.pause();
+    assert_eq!(
+        bridge.try_set_admin(&Address::generate(&env)),
+        Err(Ok(BridgeError::ContractPaused))
+    );
+}
+
+#[test]
+fn test_view_functions_work_when_paused() {
+    let env = Env::default();
+    let (admin, user, fee_collector) = create_test_users(&env);
+    let (bridge_id, token_id) = register_all_contracts(&env);
+    let bridge = create_bridge_client(&env, &bridge_id);
+    init_token(&env, &token_id, &admin);
+
+    bridge.initialize(&admin, &fee_collector, &50u32);
+    mint_tokens(&env, &token_id, &user, 1000i128);
+    bridge.pause();
+
+    assert_eq!(bridge.query_fee_bps(), 50u32);
+    assert_eq!(bridge.query_fee_collector(), fee_collector);
+    assert_eq!(bridge.query_admin(), admin);
+    assert!(bridge.query_is_initialized());
+    assert!(bridge.query_is_paused());
+    assert_eq!(bridge.query_balance(&user, &token_id), 1000i128);
+}
+
+#[test]
+fn test_pause_emits_event() {
+    let env = Env::default();
+    let (admin, _user, fee_collector) = create_test_users(&env);
+    let (bridge_id, _) = register_all_contracts(&env);
+    let bridge = create_bridge_client(&env, &bridge_id);
+
+    bridge.initialize(&admin, &fee_collector, &50u32);
+    bridge.pause();
+
+    let events = env.events().all();
+    let (contract_id, _topics, _data) = &events.get(events.len() - 1).unwrap();
+    assert_eq!(contract_id, &bridge_id);
+}
+
+#[test]
+fn test_unpause_emits_event() {
+    let env = Env::default();
+    let (admin, _user, fee_collector) = create_test_users(&env);
+    let (bridge_id, _) = register_all_contracts(&env);
+    let bridge = create_bridge_client(&env, &bridge_id);
+
+    bridge.initialize(&admin, &fee_collector, &50u32);
+    bridge.pause();
+    bridge.unpause();
+
+    let events = env.events().all();
+    let (contract_id, _topics, _data) = &events.get(events.len() - 1).unwrap();
+    assert_eq!(contract_id, &bridge_id);
+}
+
+#[test]
+fn test_fund_works_after_unpause() {
+    let env = Env::default();
+    let (admin, user, fee_collector) = create_test_users(&env);
+    let (bridge_id, token_id) = register_all_contracts(&env);
+    let bridge = create_bridge_client(&env, &bridge_id);
+    init_token(&env, &token_id, &admin);
+
+    bridge.initialize(&admin, &fee_collector, &100u32);
+    mint_tokens(&env, &token_id, &user, 1000i128);
+    bridge.pause();
+    bridge.unpause();
+
+    let target = Address::generate(&env);
+    bridge.fund_c_address(&user, &target, &token_id, &500i128);
+
+    assert_eq!(check_balance(&env, &token_id, &target), 495i128);
+}
+
+// The soroban-sdk ships a known-good compiled wasm fixture used for doc/unit
+// tests. We reuse it here as our "v2" wasm to get a real BytesN<32> hash that
+// the host accepts, so we can exercise the full auth → wasm-swap → event path.
+const V2_WASM: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../target/wasm32-unknown-unknown/release/onboarding_bridge.wasm"
+));
+
+#[test]
+fn test_upgrade_admin_only_and_event() {
+    let env = Env::default();
+    let (admin, _user, fee_collector) = create_test_users(&env);
+    let (bridge_id, _) = register_all_contracts(&env);
+    let bridge = create_bridge_client(&env, &bridge_id);
+    env.mock_all_auths();
+
+    bridge.initialize(&admin, &fee_collector, &50u32);
+
+    let wasm_bytes = Bytes::from_slice(&env, V2_WASM);
+    let wasm_hash: BytesN<32> = env.deployer().upload_contract_wasm(wasm_bytes);
+
+    bridge.upgrade(&wasm_hash);
+
+    // Verify the Upgraded event was emitted from the bridge contract.
+    let events = env.events().all();
+    let (contract_id, _topics, _data) = &events.get(events.len() - 1).unwrap();
+    assert_eq!(contract_id, &bridge_id);
+}
+
+#[test]
+#[should_panic]
+fn test_upgrade_non_admin_rejected() {
+    let env = Env::default();
+    let (admin, _user, fee_collector) = create_test_users(&env);
+    let bridge_id = env.register(OnboardingBridge, ());
+    env.mock_all_auths();
+    let bridge = create_bridge_client(&env, &bridge_id);
+
+    bridge.initialize(&admin, &fee_collector, &50u32);
+
+    let wasm_bytes = Bytes::from_slice(&env, V2_WASM);
+    let wasm_hash: BytesN<32> = env.deployer().upload_contract_wasm(wasm_bytes);
+
+    // Clear all mocked auths so upgrade is called without admin authorization.
+    use soroban_sdk::xdr::SorobanAuthorizationEntry;
+    env.set_auths(&[] as &[SorobanAuthorizationEntry]);
+    bridge.upgrade(&wasm_hash);
 }
 
 /********** Minimal Test Token **********/
