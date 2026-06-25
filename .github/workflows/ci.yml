@@ -27,14 +27,11 @@ jobs:
       - name: Build contract
         run: cargo build -p onboarding-bridge --release
 
-      - name: Run contract tests
-        run: cargo test -p onboarding-bridge --features testutils
-
       - name: Build WASM (release)
         run: cargo build -p onboarding-bridge --release --target wasm32-unknown-unknown
 
-      - name: Optimize WASM with stellar-contract-optimizer
-        uses: stellar/stellar-contract-optimizer@v1
+      - name: Run contract tests
+        run: cargo test -p onboarding-bridge --features testutils
 
       - name: Upload WASM artifact
         uses: actions/upload-artifact@v4
@@ -60,10 +57,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: sdk/node_modules
-          key: ${{ runner.os }}-node-${{ hashFiles('sdk/package-lock.json') }}
+          key: ${{ runner.os }}-node-${{ hashFiles('sdk/package.json') }}
 
       - name: Install dependencies
-        run: npm ci
+        run: npm install
 
       - name: TypeScript type-check
         run: npx tsc --noEmit

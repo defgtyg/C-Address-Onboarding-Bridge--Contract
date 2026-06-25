@@ -1,7 +1,7 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, token, Address, Env, Vec,
+    contract, contracterror, contractimpl, contracttype, token, Address, BytesN, Env, Vec,
 };
 
 #[contracterror]
@@ -12,6 +12,10 @@ pub enum BridgeError {
     InvalidAmount = 3,
     FeeTooHigh = 4,
     MismatchedArrays = 5,
+    ContractPaused = 6,
+    AddressBlocked = 7,
+    AddressNotAllowlisted = 8,
+    InsufficientReclaimable = 9,
 }
 
 #[contracttype]
@@ -20,6 +24,11 @@ pub enum DataKey {
     FeeCollector,
     FeeBps,
     Initialized,
+    Paused,
+    Blocked(Address),
+    Allowlisted(Address),
+    AllowlistMode,
+    AccruedFees(Address),
 }
 
 const MAX_FEE_BPS: u32 = 1_000;
@@ -30,16 +39,11 @@ fn save_admin(env: &Env, admin: &Address) {
 }
 
 fn read_admin(env: &Env) -> Address {
-    env.storage()
-        .instance()
-        .get(&DataKey::Admin)
-        .unwrap()
+    env.storage().instance().get(&DataKey::Admin).unwrap()
 }
 
 fn save_fee_collector(env: &Env, addr: &Address) {
-    env.storage()
-        .instance()
-        .set(&DataKey::FeeCollector, addr);
+    env.storage().instance().set(&DataKey::FeeCollector, addr);
 }
 
 fn read_fee_collector(env: &Env) -> Address {
@@ -54,10 +58,7 @@ fn save_fee_bps(env: &Env, fee_bps: &u32) {
 }
 
 fn read_fee_bps(env: &Env) -> u32 {
-    env.storage()
-        .instance()
-        .get(&DataKey::FeeBps)
-        .unwrap_or(0)
+    env.storage().instance().get(&DataKey::FeeBps).unwrap_or(0)
 }
 
 fn read_initialized(env: &Env) -> bool {
@@ -65,19 +66,84 @@ fn read_initialized(env: &Env) -> bool {
 }
 
 fn mark_initialized(env: &Env) {
-    env.storage()
-        .instance()
-        .set(&DataKey::Initialized, &true);
+    env.storage().instance().set(&DataKey::Initialized, &true);
 }
 
-fn check_initialized(env: &Env) {
+fn check_initialized(env: &Env) -> Result<(), BridgeError> {
     if !read_initialized(env) {
-        panic!("not initialized");
+        return Err(BridgeError::NotInitialized);
     }
+    Ok(())
+}
+
+fn read_paused(env: &Env) -> bool {
+    env.storage()
+        .instance()
+        .get(&DataKey::Paused)
+        .unwrap_or(false)
+}
+
+fn check_not_paused(env: &Env) -> Result<(), BridgeError> {
+    if read_paused(env) {
+        return Err(BridgeError::ContractPaused);
+    }
+    Ok(())
 }
 
 fn calculate_fee(amount: i128, fee_bps: u32) -> i128 {
     (amount * fee_bps as i128) / FEE_DENOMINATOR
+}
+
+fn is_blocked(env: &Env, addr: &Address) -> bool {
+    env.storage()
+        .persistent()
+        .get(&DataKey::Blocked(addr.clone()))
+        .unwrap_or(false)
+}
+
+fn is_allowlisted(env: &Env, addr: &Address) -> bool {
+    env.storage()
+        .persistent()
+        .get(&DataKey::Allowlisted(addr.clone()))
+        .unwrap_or(false)
+}
+
+fn allowlist_mode(env: &Env) -> bool {
+    env.storage()
+        .instance()
+        .get(&DataKey::AllowlistMode)
+        .unwrap_or(false)
+}
+
+fn check_access(env: &Env, target: &Address) -> Result<(), BridgeError> {
+    if is_blocked(env, target) {
+        return Err(BridgeError::AddressBlocked);
+    }
+    if allowlist_mode(env) && !is_allowlisted(env, target) {
+        return Err(BridgeError::AddressNotAllowlisted);
+    }
+    Ok(())
+}
+
+fn read_accrued_fees(env: &Env, asset: &Address) -> i128 {
+    env.storage()
+        .persistent()
+        .get(&DataKey::AccruedFees(asset.clone()))
+        .unwrap_or(0)
+}
+
+fn increment_accrued_fees(env: &Env, asset: &Address, amount: i128) {
+    let current = read_accrued_fees(env, asset);
+    env.storage()
+        .persistent()
+        .set(&DataKey::AccruedFees(asset.clone()), &(current + amount));
+}
+
+fn decrement_accrued_fees(env: &Env, asset: &Address, amount: i128) {
+    let current = read_accrued_fees(env, asset);
+    env.storage()
+        .persistent()
+        .set(&DataKey::AccruedFees(asset.clone()), &(current - amount));
 }
 
 #[contract]
@@ -85,34 +151,24 @@ pub struct OnboardingBridge;
 
 #[contractimpl]
 impl OnboardingBridge {
-    /// Initializes the bridge contract configuration.
-    ///
-    /// # Arguments
-    /// * `env` - Soroban environment for storage and authorization.
-    /// * `admin` - Address authorized to update bridge configuration.
-    /// * `fee_collector` - Address authorized to withdraw accumulated fees.
-    /// * `fee_bps` - Fee in basis points; must not exceed the contract maximum.
-    ///
-    /// # Authorization
-    /// Requires authorization from `admin`.
-    ///
-    /// # Panics
-    /// Panics if the contract is already initialized or if `fee_bps` is too high.
-    ///
-    /// # Security
-    /// Call this once during deployment with reviewed admin and fee collector addresses.
-    pub fn initialize(env: Env, admin: Address, fee_collector: Address, fee_bps: u32) {
+    pub fn initialize(
+        env: Env,
+        admin: Address,
+        fee_collector: Address,
+        fee_bps: u32,
+    ) -> Result<(), BridgeError> {
         if read_initialized(&env) {
-            panic!("already initialized");
+            return Err(BridgeError::AlreadyInitialized);
         }
         if fee_bps > MAX_FEE_BPS {
-            panic!("fee too high");
+            return Err(BridgeError::FeeTooHigh);
         }
         admin.require_auth();
         save_admin(&env, &admin);
         save_fee_collector(&env, &fee_collector);
         save_fee_bps(&env, &fee_bps);
         mark_initialized(&env);
+        Ok(())
     }
 
     /// Funds a single C-address with tokens from a source account.
@@ -143,11 +199,13 @@ impl OnboardingBridge {
         target: Address,
         asset: Address,
         amount: i128,
-    ) {
-        check_initialized(&env);
+    ) -> Result<(), BridgeError> {
+        check_initialized(&env)?;
+        check_not_paused(&env)?;
         if amount <= 0 {
-            panic!("invalid amount");
+            return Err(BridgeError::InvalidAmount);
         }
+        check_access(&env, &target)?;
         source.require_auth();
 
         let token_client = token::Client::new(&env, &asset);
@@ -161,10 +219,10 @@ impl OnboardingBridge {
             token_client.transfer(&env.current_contract_address(), &target, &net_amount);
         }
 
-        env.events().publish(
-            ("CAddressFunded", source, target),
-            (amount, fee, asset),
-        );
+        increment_accrued_fees(&env, &asset, fee);
+        env.events()
+            .publish(("CAddressFunded", source, target), (amount, fee, asset));
+        Ok(())
     }
 
     /// Funds multiple C-addresses in one transaction.
@@ -193,13 +251,14 @@ impl OnboardingBridge {
         targets: Vec<Address>,
         amounts: Vec<i128>,
         asset: Address,
-    ) {
-        check_initialized(&env);
+    ) -> Result<(), BridgeError> {
+        check_initialized(&env)?;
+        check_not_paused(&env)?;
         if targets.len() != amounts.len() {
-            panic!("mismatched arrays");
+            return Err(BridgeError::MismatchedArrays);
         }
         if targets.len() == 0 {
-            return;
+            return Ok(());
         }
         source.require_auth();
 
@@ -207,7 +266,7 @@ impl OnboardingBridge {
         for i in 0..targets.len() {
             let amount = amounts.get(i).unwrap();
             if amount <= 0 {
-                panic!("invalid amount");
+                return Err(BridgeError::InvalidAmount);
             }
             total += amount;
         }
@@ -221,6 +280,7 @@ impl OnboardingBridge {
         for i in 0..targets.len() {
             let target = targets.get(i).unwrap();
             let amount = amounts.get(i).unwrap();
+            check_access(&env, &target)?;
             let fee = calculate_fee(amount, fee_bps);
             let net_amount = amount - fee;
 
@@ -228,101 +288,50 @@ impl OnboardingBridge {
                 token_client.transfer(&contract_addr, &target, &net_amount);
             }
 
+            increment_accrued_fees(&env, &asset, fee);
             env.events().publish(
                 ("CAddressFunded", source.clone(), target),
                 (amount, fee, asset.clone()),
             );
         }
+        Ok(())
     }
 
-    /// Updates the bridge fee in basis points.
-    ///
-    /// # Arguments
-    /// * `env` - Soroban environment for storage and authorization.
-    /// * `new_fee_bps` - New fee value, capped by the contract maximum.
-    ///
-    /// # Authorization
-    /// Requires authorization from the current admin.
-    ///
-    /// # Panics
-    /// Panics if the contract is not initialized, admin auth fails, or the fee exceeds the maximum.
-    ///
-    /// # Security
-    /// Treat fee changes as admin operations that should be reviewed and monitored.
-    pub fn set_fee_bps(env: Env, new_fee_bps: u32) {
-        check_initialized(&env);
+    pub fn set_fee_bps(env: Env, new_fee_bps: u32) -> Result<(), BridgeError> {
+        check_initialized(&env)?;
+        check_not_paused(&env)?;
         if new_fee_bps > MAX_FEE_BPS {
-            panic!("fee too high");
+            return Err(BridgeError::FeeTooHigh);
         }
         let admin = read_admin(&env);
         admin.require_auth();
         save_fee_bps(&env, &new_fee_bps);
+        Ok(())
     }
 
-    /// Updates the address allowed to withdraw accumulated fees.
-    ///
-    /// # Arguments
-    /// * `env` - Soroban environment for storage and authorization.
-    /// * `new_fee_collector` - Replacement fee collector address.
-    ///
-    /// # Authorization
-    /// Requires authorization from the current admin.
-    ///
-    /// # Panics
-    /// Panics if the contract is not initialized or admin auth fails.
-    ///
-    /// # Security
-    /// Verify custody and operational ownership of the new fee collector before changing it.
-    pub fn set_fee_collector(env: Env, new_fee_collector: Address) {
-        check_initialized(&env);
+    pub fn set_fee_collector(env: Env, new_fee_collector: Address) -> Result<(), BridgeError> {
+        check_initialized(&env)?;
+        check_not_paused(&env)?;
         let admin = read_admin(&env);
         admin.require_auth();
         save_fee_collector(&env, &new_fee_collector);
+        Ok(())
     }
 
-    /// Transfers bridge administration to a new address.
-    ///
-    /// # Arguments
-    /// * `env` - Soroban environment for storage and authorization.
-    /// * `new_admin` - Replacement admin address.
-    ///
-    /// # Authorization
-    /// Requires authorization from the current admin.
-    ///
-    /// # Panics
-    /// Panics if the contract is not initialized or admin auth fails.
-    ///
-    /// # Security
-    /// Admin rotation should be rehearsed and recorded because the new admin controls future configuration changes.
-    pub fn set_admin(env: Env, new_admin: Address) {
-        check_initialized(&env);
+    pub fn set_admin(env: Env, new_admin: Address) -> Result<(), BridgeError> {
+        check_initialized(&env)?;
+        check_not_paused(&env)?;
         let admin = read_admin(&env);
         admin.require_auth();
         save_admin(&env, &new_admin);
+        Ok(())
     }
 
-    /// Withdraws accumulated fees to the configured fee collector.
-    ///
-    /// # Arguments
-    /// * `env` - Soroban environment for token calls and authorization.
-    /// * `asset` - Token contract address whose fees should be withdrawn.
-    /// * `amount` - Amount to withdraw from the contract fee balance.
-    ///
-    /// # Authorization
-    /// Requires authorization from the configured fee collector.
-    ///
-    /// # Events
-    /// Emits `FeesWithdrawn` with fee collector, asset, and amount.
-    ///
-    /// # Panics
-    /// Panics if the contract is not initialized, amount is non-positive, fee collector auth fails, or the token transfer fails.
-    ///
-    /// # Security
-    /// Withdrawals should be tied to an operational schedule and reconciled against emitted events.
-    pub fn withdraw_fees(env: Env, asset: Address, amount: i128) {
-        check_initialized(&env);
+    pub fn withdraw_fees(env: Env, asset: Address, amount: i128) -> Result<(), BridgeError> {
+        check_initialized(&env)?;
+        check_not_paused(&env)?;
         if amount <= 0 {
-            panic!("invalid amount");
+            return Err(BridgeError::InvalidAmount);
         }
         let fee_collector = read_fee_collector(&env);
         fee_collector.require_auth();
@@ -330,50 +339,25 @@ impl OnboardingBridge {
         let token_client = token::Client::new(&env, &asset);
         token_client.transfer(&env.current_contract_address(), &fee_collector, &amount);
 
+        decrement_accrued_fees(&env, &asset, amount);
         env.events()
             .publish(("FeesWithdrawn", fee_collector), (amount, asset));
+        Ok(())
     }
 
-    /// Returns the configured bridge fee in basis points.
-    ///
-    /// # Arguments
-    /// * `env` - Soroban environment for reading instance storage.
-    ///
-    /// # Returns
-    /// Current fee basis points, or zero if not set.
-    pub fn query_fee_bps(env: Env) -> u32 {
-        check_initialized(&env);
-        read_fee_bps(&env)
+    pub fn query_fee_bps(env: Env) -> Result<u32, BridgeError> {
+        check_initialized(&env)?;
+        Ok(read_fee_bps(&env))
     }
 
-    /// Returns the configured fee collector address.
-    ///
-    /// # Arguments
-    /// * `env` - Soroban environment for reading instance storage.
-    ///
-    /// # Returns
-    /// Fee collector address.
-    ///
-    /// # Panics
-    /// Panics if the fee collector has not been initialized.
-    pub fn query_fee_collector(env: Env) -> Address {
-        check_initialized(&env);
-        read_fee_collector(&env)
+    pub fn query_fee_collector(env: Env) -> Result<Address, BridgeError> {
+        check_initialized(&env)?;
+        Ok(read_fee_collector(&env))
     }
 
-    /// Returns the configured admin address.
-    ///
-    /// # Arguments
-    /// * `env` - Soroban environment for reading instance storage.
-    ///
-    /// # Returns
-    /// Admin address.
-    ///
-    /// # Panics
-    /// Panics if the admin has not been initialized.
-    pub fn query_admin(env: Env) -> Address {
-        check_initialized(&env);
-        read_admin(&env)
+    pub fn query_admin(env: Env) -> Result<Address, BridgeError> {
+        check_initialized(&env)?;
+        Ok(read_admin(&env))
     }
 
     /// Reads a token balance for an address.
@@ -393,15 +377,133 @@ impl OnboardingBridge {
         token_client.balance(&c_address)
     }
 
-    /// Returns whether the bridge has been initialized.
-    ///
-    /// # Arguments
-    /// * `env` - Soroban environment for reading instance storage.
-    ///
-    /// # Returns
-    /// `true` if initialization state exists, otherwise `false`.
+    pub fn query_fee_balance(env: Env, asset: Address) -> Result<i128, BridgeError> {
+        check_initialized(&env)?;
+        let token_client = token::Client::new(&env, &asset);
+        Ok(token_client.balance(&env.current_contract_address()))
+    }
+
     pub fn query_is_initialized(env: Env) -> bool {
         read_initialized(&env)
+    }
+
+    pub fn pause(env: Env) -> Result<(), BridgeError> {
+        check_initialized(&env)?;
+        let admin = read_admin(&env);
+        admin.require_auth();
+        env.storage().instance().set(&DataKey::Paused, &true);
+        env.events().publish(("ContractPaused",), (admin,));
+        Ok(())
+    }
+
+    pub fn unpause(env: Env) -> Result<(), BridgeError> {
+        check_initialized(&env)?;
+        let admin = read_admin(&env);
+        admin.require_auth();
+        env.storage().instance().set(&DataKey::Paused, &false);
+        env.events().publish(("ContractUnpaused",), (admin,));
+        Ok(())
+    }
+
+    pub fn query_is_paused(env: Env) -> bool {
+        read_paused(&env)
+    }
+
+    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) -> Result<(), BridgeError> {
+        check_initialized(&env)?;
+        let admin = read_admin(&env);
+        admin.require_auth();
+        env.deployer()
+            .update_current_contract_wasm(new_wasm_hash.clone());
+        env.events().publish(("Upgraded",), (admin, new_wasm_hash));
+        Ok(())
+    }
+
+    // --- Blocklist / Allowlist ---
+
+    pub fn add_to_blocklist(env: Env, address: Address) -> Result<(), BridgeError> {
+        check_initialized(&env)?;
+        read_admin(&env).require_auth();
+        env.storage()
+            .persistent()
+            .set(&DataKey::Blocked(address), &true);
+        Ok(())
+    }
+
+    pub fn remove_from_blocklist(env: Env, address: Address) -> Result<(), BridgeError> {
+        check_initialized(&env)?;
+        read_admin(&env).require_auth();
+        env.storage()
+            .persistent()
+            .remove(&DataKey::Blocked(address));
+        Ok(())
+    }
+
+    pub fn add_to_allowlist(env: Env, address: Address) -> Result<(), BridgeError> {
+        check_initialized(&env)?;
+        read_admin(&env).require_auth();
+        env.storage()
+            .persistent()
+            .set(&DataKey::Allowlisted(address), &true);
+        Ok(())
+    }
+
+    pub fn remove_from_allowlist(env: Env, address: Address) -> Result<(), BridgeError> {
+        check_initialized(&env)?;
+        read_admin(&env).require_auth();
+        env.storage()
+            .persistent()
+            .remove(&DataKey::Allowlisted(address));
+        Ok(())
+    }
+
+    pub fn set_allowlist_mode(env: Env, enabled: bool) -> Result<(), BridgeError> {
+        check_initialized(&env)?;
+        read_admin(&env).require_auth();
+        env.storage()
+            .instance()
+            .set(&DataKey::AllowlistMode, &enabled);
+        Ok(())
+    }
+
+    pub fn query_is_blocked(env: Env, address: Address) -> bool {
+        is_blocked(&env, &address)
+    }
+
+    pub fn query_is_allowlisted(env: Env, address: Address) -> bool {
+        is_allowlisted(&env, &address)
+    }
+
+    pub fn query_allowlist_mode(env: Env) -> bool {
+        allowlist_mode(&env)
+    }
+
+    pub fn reclaim_tokens(
+        env: Env,
+        asset: Address,
+        amount: i128,
+        destination: Address,
+    ) -> Result<(), BridgeError> {
+        check_initialized(&env)?;
+        if amount <= 0 {
+            return Err(BridgeError::InvalidAmount);
+        }
+        let admin = read_admin(&env);
+        admin.require_auth();
+
+        let token_client = token::Client::new(&env, &asset);
+        let contract_balance = token_client.balance(&env.current_contract_address());
+        let accrued = read_accrued_fees(&env, &asset);
+        let reclaimable = contract_balance - accrued;
+
+        if reclaimable < amount {
+            return Err(BridgeError::InsufficientReclaimable);
+        }
+
+        token_client.transfer(&env.current_contract_address(), &destination, &amount);
+        env.events()
+            .publish(("TokensReclaimed", admin, asset), (amount, destination));
+        Ok(())
     }
 }
 

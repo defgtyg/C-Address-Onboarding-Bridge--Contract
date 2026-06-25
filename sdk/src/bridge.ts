@@ -3,6 +3,7 @@ import {
   FundCOptions,
   BatchFundCOptions,
   WithdrawFeesOptions,
+  UpgradeOptions,
   TransactionResult,
 } from './types';
 import {
@@ -15,7 +16,6 @@ import {
   scValToNative,
   TransactionBuilder,
   BASE_FEE,
-  Networks,
 } from '@stellar/stellar-sdk';
 
 /**
@@ -94,7 +94,7 @@ export class OnboardingBridgeSDK {
 
       return {
         hash: response.hash,
-        status: response.status === 'success' ? 'success' : 'pending',
+        status: response.status === 'ERROR' ? 'failed' : 'pending',
       };
     } catch (error: any) {
       return {
@@ -147,7 +147,7 @@ export class OnboardingBridgeSDK {
 
       return {
         hash: response.hash,
-        status: response.status === 'success' ? 'success' : 'pending',
+        status: response.status === 'ERROR' ? 'failed' : 'pending',
       };
     } catch (error: any) {
       return {
@@ -197,7 +197,7 @@ export class OnboardingBridgeSDK {
 
       return {
         hash: response.hash,
-        status: response.status === 'success' ? 'success' : 'pending',
+        status: response.status === 'ERROR' ? 'failed' : 'pending',
       };
     } catch (error: any) {
       return {
@@ -222,7 +222,7 @@ export class OnboardingBridgeSDK {
         this.buildSimulationTx('query_fee_bps', []),
       );
 
-    if (result.error) {
+    if ('error' in result && result.error) {
       throw new Error(`Failed to get fee: ${result.error}`);
     }
 
@@ -244,7 +244,7 @@ export class OnboardingBridgeSDK {
         this.buildSimulationTx('query_fee_collector', []),
       );
 
-    if (result.error) {
+    if ('error' in result && result.error) {
       throw new Error(`Failed to get fee collector: ${result.error}`);
     }
 
@@ -266,7 +266,7 @@ export class OnboardingBridgeSDK {
         this.buildSimulationTx('query_admin', []),
       );
 
-    if (result.error) {
+    if ('error' in result && result.error) {
       throw new Error(`Failed to get admin: ${result.error}`);
     }
 
@@ -293,7 +293,7 @@ export class OnboardingBridgeSDK {
         this.buildSimulationTx('query_balance', [cAddress, asset]),
       );
 
-    if (result.error) {
+    if ('error' in result && result.error) {
       throw new Error(`Failed to get balance: ${result.error}`);
     }
 
@@ -302,20 +302,32 @@ export class OnboardingBridgeSDK {
   }
 
   /**
- * Checks whether the bridge contract has been initialized.
- *
- * @returns `true` when initialization state is present, otherwise `false`.
- * @throws If Soroban simulation fails unexpectedly.
- * @example
- * if (!(await sdk.isInitialized())) throw new Error("Bridge is not initialized");
- */
+   * Get the fee balance held by the contract for a given asset.
+   */
+  async getFeeBalance(asset: string): Promise<string> {
+    const result = await this.provider
+      .simulateTransaction(
+        this.buildSimulationTx('query_fee_balance', [asset]),
+      );
+
+    if ('error' in result && result.error) {
+      throw new Error(`Failed to get fee balance: ${result.error}`);
+    }
+
+    const scVal = (result as any).results?.[0]?.retval;
+    return scVal ? scValToNative(scVal).toString() : '0';
+  }
+
+  /**
+   * Check if the bridge contract is initialized.
+   */
   async isInitialized(): Promise<boolean> {
     const result = await this.provider
       .simulateTransaction(
         this.buildSimulationTx('query_is_initialized', []),
       );
 
-    if (result.error) {
+    if ('error' in result && result.error) {
       throw new Error(`Failed to check initialization: ${result.error}`);
     }
 
@@ -362,7 +374,7 @@ export class OnboardingBridgeSDK {
 
       return {
         hash: response.hash,
-        status: response.status === 'success' ? 'success' : 'pending',
+        status: response.status === 'ERROR' ? 'failed' : 'pending',
       };
     } catch (error: any) {
       return {
@@ -412,7 +424,7 @@ export class OnboardingBridgeSDK {
 
       return {
         hash: response.hash,
-        status: response.status === 'success' ? 'success' : 'pending',
+        status: response.status === 'ERROR' ? 'failed' : 'pending',
       };
     } catch (error: any) {
       return {
@@ -462,7 +474,52 @@ export class OnboardingBridgeSDK {
 
       return {
         hash: response.hash,
-        status: response.status === 'success' ? 'success' : 'pending',
+        status: response.status === 'ERROR' ? 'failed' : 'pending',
+      };
+    } catch (error: any) {
+      return {
+        hash: '',
+        status: 'failed',
+        error: error.message || 'Unknown error',
+      };
+    }
+  }
+
+  /**
+   * Upgrade the contract to a new wasm implementation (admin only).
+   * The new_wasm_hash must reference wasm already uploaded to the network.
+   * Preserves all instance storage (admin, fee settings, etc.).
+   */
+  async upgrade(
+    options: UpgradeOptions,
+    adminKeypair: any,
+  ): Promise<TransactionResult> {
+    try {
+      const adminAccount = await this.provider.getAccount(
+        adminKeypair.publicKey(),
+      );
+
+      const wasmHashBytes = Buffer.from(options.newWasmHash, 'hex');
+      const wasmHashScVal = xdr.ScVal.scvBytes(wasmHashBytes);
+
+      const tx = new TransactionBuilder(adminAccount, {
+        fee: BASE_FEE,
+        networkPassphrase: this.networkPassphrase,
+      })
+        .addOperation(
+          this.contract.call('upgrade', wasmHashScVal),
+        )
+        .setTimeout(30)
+        .build();
+
+      const preparedTx = await this.provider.prepareTransaction(tx);
+      preparedTx.sign(adminKeypair);
+
+      const response = await this.provider.sendTransaction(preparedTx);
+
+      return {
+        hash: response.hash,
+        status: response.status === 'PENDING' ? 'success' : 'pending',
       };
     } catch (error: any) {
       return {
@@ -500,6 +557,9 @@ export class OnboardingBridgeSDK {
     if (typeof arg === 'string') {
       if (arg.startsWith('C') || arg.startsWith('G')) {
         return new Address(arg).toScVal();
+      }
+      if (/^\d+$/.test(arg)) {
+        return nativeToScVal(BigInt(arg), { type: 'i128' });
       }
       return nativeToScVal(arg, { type: 'string' });
     }
